@@ -11,43 +11,49 @@ npm run dev      # Watch mode for development
 
 ## Service Management
 
-The proxy runs as a macOS LaunchAgent on port 3456.
+The proxy runs as a systemd **user** service on port 3456 (bound to `127.0.0.1`).
 
-**Plist location:** `~/Library/LaunchAgents/com.openclaw.claude-max-proxy.plist`
+**Unit location:** `~/.config/systemd/user/claude-max-proxy.service`
 
-**Logs:**
-- stdout: `~/.openclaw/logs/claude-max-proxy.log`
-- stderr: `~/.openclaw/logs/claude-max-proxy.err.log`
+**Logs:** captured by the systemd journal (`StandardOutput/StandardError=journal`):
+
+```bash
+journalctl --user -u claude-max-proxy.service -f      # follow
+journalctl --user -u claude-max-proxy.service -n 100  # last 100 lines
+```
+
+> Note: after editing `dist/` (e.g. `npm run build`), restart the service so it
+> picks up the new build — it runs the compiled `dist/server/standalone.js`.
 
 ### Restart the service
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.openclaw.claude-max-proxy
+systemctl --user restart claude-max-proxy.service
 ```
 
 ### Stop the service
 
 ```bash
-launchctl bootout gui/$(id -u)/com.openclaw.claude-max-proxy
+systemctl --user stop claude-max-proxy.service
 ```
 
-### Start the service (after stop or plist change)
+### Start the service
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openclaw.claude-max-proxy.plist
+systemctl --user start claude-max-proxy.service
 ```
 
-### Reload after plist changes
+### Reload after editing the unit file
 
 ```bash
-launchctl bootout gui/$(id -u)/com.openclaw.claude-max-proxy
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openclaw.claude-max-proxy.plist
+systemctl --user daemon-reload
+systemctl --user restart claude-max-proxy.service
 ```
 
 ### Check status
 
 ```bash
-launchctl list com.openclaw.claude-max-proxy
+systemctl --user status claude-max-proxy.service
 ```
 
 ## Architecture

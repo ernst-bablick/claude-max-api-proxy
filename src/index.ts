@@ -12,25 +12,33 @@ import { verifyClaude, verifyAuth } from "./subprocess/manager.js";
 const PROVIDER_ID = "claude-code-cli";
 const PROVIDER_LABEL = "Claude Code CLI";
 const DEFAULT_PORT = 3456;
-const DEFAULT_MODEL = "claude-code-cli/claude-sonnet-4";
+const DEFAULT_MODEL = "claude-code-cli/claude-sonnet-5";
 
-// Available models
+// Available models.
+// The CLI resolves the bare aliases below to the current version of each tier,
+// so these ids track "latest" rather than pinning a specific release.
 const AVAILABLE_MODELS = [
   {
-    id: "claude-opus-4",
-    name: "Claude Opus 4.5",
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    alias: "fable",
+    reasoning: true,
+  },
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
     alias: "opus",
     reasoning: true,
   },
   {
-    id: "claude-sonnet-4",
-    name: "Claude Sonnet 4",
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
     alias: "sonnet",
-    reasoning: false,
+    reasoning: true,
   },
   {
-    id: "claude-haiku-4",
-    name: "Claude Haiku 4",
+    id: "claude-haiku-4-5",
+    name: "Claude Haiku 4.5",
     alias: "haiku",
     reasoning: false,
   },

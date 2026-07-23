@@ -3,26 +3,40 @@
  */
 
 import type { OpenAIChatRequest, OpenAIContentBlock } from "../types/openai.js";
+import { buildToolInstructions } from "./tools.js";
 
-export type ClaudeModel = "opus" | "sonnet" | "haiku";
+export type ClaudeModel = "fable" | "opus" | "sonnet" | "haiku";
 
 export interface CliInput {
   prompt: string;
   model: ClaudeModel;
   sessionId?: string;
+  /**
+   * System-prompt section describing host-provided tools, when the request
+   * carries `tools`. Its presence also flips the proxy into buffered
+   * tool-emission mode. Undefined when no tools are in play.
+   */
+  toolInstructions?: string;
 }
+
+export const DEFAULT_MODEL: ClaudeModel = "opus";
 
 const MODEL_MAP: Record<string, ClaudeModel> = {
   // Direct model names (provider prefixes like `claude-code-cli/` and `claude-max/`
   // are stripped by extractModel before consulting this map)
+  "claude-fable-5": "fable",
   "claude-opus-4": "opus",
   "claude-opus-4-6": "opus",
+  "claude-opus-4-7": "opus",
+  "claude-opus-4-8": "opus",
   "claude-sonnet-4": "sonnet",
   "claude-sonnet-4-5": "sonnet",
   "claude-sonnet-4-6": "sonnet",
+  "claude-sonnet-5": "sonnet",
   "claude-haiku-4": "haiku",
   "claude-haiku-4-5": "haiku",
   // Bare aliases
+  "fable": "fable",
   "opus": "opus",
   "sonnet": "sonnet",
   "haiku": "haiku",
@@ -31,7 +45,18 @@ const MODEL_MAP: Record<string, ClaudeModel> = {
 };
 
 /**
- * Extract Claude model alias from request model string
+ * Full model IDs this proxy advertises (bare aliases excluded).
+ * Single source of truth for GET /v1/models.
+ */
+export const KNOWN_MODEL_IDS = Object.keys(MODEL_MAP).filter((id) =>
+  id.startsWith("claude-")
+);
+
+/**
+ * Extract Claude model alias from request model string.
+ *
+ * The CLI resolves bare aliases (`opus`, `sonnet`, `haiku`) to the current
+ * version of each tier, so no version pinning happens here.
  */
 export function extractModel(model: string): ClaudeModel {
   // Try direct lookup
@@ -45,8 +70,22 @@ export function extractModel(model: string): ClaudeModel {
     return MODEL_MAP[stripped];
   }
 
-  // Default to opus (Claude Max subscription)
-  return "opus";
+  // Unknown model: fall back to the tier named in the string rather than
+  // silently routing everything to opus.
+  const tier = (["fable", "opus", "sonnet", "haiku"] as const).find((t) =>
+    stripped.includes(t)
+  );
+  if (tier) {
+    console.warn(
+      `[ClaudeCodeCLI] Unknown model "${model}", routing to "${tier}"`
+    );
+    return tier;
+  }
+
+  console.warn(
+    `[ClaudeCodeCLI] Unknown model "${model}", falling back to "${DEFAULT_MODEL}"`
+  );
+  return DEFAULT_MODEL;
 }
 
 /**
@@ -122,9 +161,28 @@ export function messagesToPrompt(
         parts.push(text);
         break;
 
-      case "assistant":
-        // Previous assistant responses for context
-        parts.push(`<previous_response>\n${text}\n</previous_response>\n`);
+      case "assistant": {
+        // Previous assistant responses for context, including any host-tool
+        // calls the model made on that turn (replayed so it keeps continuity
+        // across the stateless --print boundary).
+        const segments: string[] = [];
+        if (text) segments.push(text);
+        for (const call of msg.tool_calls ?? []) {
+          segments.push(
+            `[called tool ${call.function.name} with arguments ${call.function.arguments}]`
+          );
+        }
+        parts.push(
+          `<previous_response>\n${segments.join("\n")}\n</previous_response>\n`
+        );
+        break;
+      }
+
+      case "tool":
+        // Result of a host-executed tool call, fed back to the model.
+        parts.push(
+          `<tool_result tool_call_id="${msg.tool_call_id ?? ""}">\n${text}\n</tool_result>\n`
+        );
         break;
     }
   }
@@ -140,5 +198,6 @@ export function openaiToCli(request: OpenAIChatRequest): CliInput {
     prompt: messagesToPrompt(request.messages),
     model: extractModel(request.model),
     sessionId: request.user, // Use OpenAI's user field for session mapping
+    toolInstructions: buildToolInstructions(request.tools, request.tool_choice),
   };
 }

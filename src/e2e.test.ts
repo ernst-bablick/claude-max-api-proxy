@@ -58,6 +58,9 @@ describe("health and models", () => {
     for (const expected of [
       "claude-opus-4",
       "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-opus-4-8",
+      "claude-sonnet-5",
       "claude-sonnet-4",
       "claude-sonnet-4-5",
       "claude-sonnet-4-6",

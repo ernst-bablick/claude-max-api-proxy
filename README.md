@@ -196,6 +196,25 @@ launchctl bootout gui/$(id -u)/com.openclaw.claude-max-proxy
 launchctl list com.openclaw.claude-max-proxy
 ```
 
+## Auto-Start on Linux (systemd)
+
+The proxy can run as a systemd **user** service on port 3456.
+
+**Unit location:** `~/.config/systemd/user/claude-max-proxy.service`
+
+```bash
+# Start / stop / restart
+systemctl --user start claude-max-proxy.service
+systemctl --user stop claude-max-proxy.service
+systemctl --user restart claude-max-proxy.service
+
+# Check status
+systemctl --user status claude-max-proxy.service
+
+# Follow logs (journald)
+journalctl --user -u claude-max-proxy.service -f
+```
+
 ## Architecture
 
 ```

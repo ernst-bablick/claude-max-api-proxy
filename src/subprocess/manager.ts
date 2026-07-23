@@ -9,6 +9,7 @@ import { spawn, ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import fs from "fs/promises";
 import path from "path";
+import os from "os";
 import type {
   ClaudeCliMessage,
   ClaudeCliAssistant,
@@ -23,6 +24,7 @@ import {
   isToolUseBlockStart,
   isInputJsonDelta,
   isContentBlockStop,
+  isSystemInit,
 } from "../types/claude-cli.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 
@@ -31,6 +33,11 @@ export interface SubprocessOptions {
   sessionId?: string;
   cwd?: string;
   timeout?: number;
+  /**
+   * Extra system-prompt text describing host-provided tools and the
+   * ```tool_call``` emission protocol. Appended after the tool-name mapping.
+   */
+  toolInstructions?: string;
 }
 
 export interface SubprocessEvents {
@@ -88,17 +95,22 @@ const OPENCLAW_TOOL_MAPPING_PROMPT = [
   "Run `openclaw skills list --eligible --json` to see all available skills.",
 ].join("\n");
 
+// Monotonic counter to keep temp system-prompt filenames unique within a
+// process even when multiple subprocesses start in the same millisecond.
+let systemPromptFileSeq = 0;
+
 export class ClaudeSubprocess extends EventEmitter {
   private process: ChildProcess | null = null;
   private buffer: string = "";
   private timeoutId: NodeJS.Timeout | null = null;
   private isKilled: boolean = false;
+  private systemPromptFile: string | null = null;
 
   /**
    * Start the Claude CLI subprocess with the given prompt
    */
   async start(prompt: string, options: SubprocessOptions): Promise<void> {
-    const args = this.buildArgs(options);
+    const args = await this.buildArgs(options);
     const timeout = options.timeout || DEFAULT_TIMEOUT;
 
     return new Promise((resolve, reject) => {
@@ -124,6 +136,7 @@ export class ClaudeSubprocess extends EventEmitter {
         // Handle spawn errors (e.g., claude not found)
         this.process.on("error", (err) => {
           this.clearTimeout();
+          this.cleanupSystemPromptFile();
           if (err.message.includes("ENOENT")) {
             reject(
               new Error(
@@ -171,6 +184,7 @@ export class ClaudeSubprocess extends EventEmitter {
             console.error(`[Subprocess] Process closed with code: ${code}`);
           }
           this.clearTimeout();
+          this.cleanupSystemPromptFile();
           // Process any remaining buffer
           if (this.buffer.trim()) {
             this.processBuffer();
@@ -182,6 +196,7 @@ export class ClaudeSubprocess extends EventEmitter {
         resolve();
       } catch (err) {
         this.clearTimeout();
+        this.cleanupSystemPromptFile();
         reject(err);
       }
     });
@@ -190,7 +205,21 @@ export class ClaudeSubprocess extends EventEmitter {
   /**
    * Build CLI arguments array
    */
-  private buildArgs(options: SubprocessOptions): string[] {
+  private async buildArgs(options: SubprocessOptions): Promise<string[]> {
+    const appendSystemPrompt = options.toolInstructions
+      ? `${OPENCLAW_TOOL_MAPPING_PROMPT}\n\n${options.toolInstructions}`
+      : OPENCLAW_TOOL_MAPPING_PROMPT;
+
+    // Pass the (potentially large) system prompt via a file rather than argv.
+    // Host-provided tool instructions can exceed the per-argument limit
+    // (MAX_ARG_STRLEN, 128KB on Linux), which makes spawn() fail with E2BIG.
+    // --append-system-prompt-file reads the same content off disk instead.
+    this.systemPromptFile = path.join(
+      os.tmpdir(),
+      `claude-proxy-sysprompt-${process.pid}-${++systemPromptFileSeq}.txt`
+    );
+    await fs.writeFile(this.systemPromptFile, appendSystemPrompt, "utf8");
+
     const args = [
       "--print", // Non-interactive mode
       "--dangerously-skip-permissions", // Skip permission prompts
@@ -201,8 +230,8 @@ export class ClaudeSubprocess extends EventEmitter {
       "--model",
       options.model, // Model alias (opus/sonnet/haiku)
       "--no-session-persistence", // Don't save sessions
-      "--append-system-prompt",
-      OPENCLAW_TOOL_MAPPING_PROMPT,
+      "--append-system-prompt-file",
+      this.systemPromptFile,
       // Prompt is passed via stdin (avoids E2BIG on large inputs)
     ];
 
@@ -211,6 +240,19 @@ export class ClaudeSubprocess extends EventEmitter {
     }
 
     return args;
+  }
+
+  /**
+   * Remove the temporary system-prompt file, if one was written.
+   */
+  private cleanupSystemPromptFile(): void {
+    if (this.systemPromptFile) {
+      const file = this.systemPromptFile;
+      this.systemPromptFile = null;
+      fs.unlink(file).catch(() => {
+        // Best-effort: the file lives in tmpdir and will be reaped anyway.
+      });
+    }
   }
 
   /**
@@ -227,6 +269,12 @@ export class ClaudeSubprocess extends EventEmitter {
       try {
         const message: ClaudeCliMessage = JSON.parse(trimmed);
         this.emit("message", message);
+
+        if (isSystemInit(message)) {
+          // Authoritative main model for this run (sub-agent work may report
+          // a different, smaller model on later messages).
+          this.emit("init", message);
+        }
 
         if (isTextBlockStart(message)) {
           // Emit when a new text content block starts (for inserting separators)

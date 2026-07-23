@@ -9,9 +9,40 @@ export interface OpenAIContentBlock {
 }
 
 export interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string | OpenAIContentBlock[];
+  /** Present on assistant turns that called host tools (replayed for context). */
+  tool_calls?: OpenAIToolCall[];
+  /** Present on `tool`-role messages: the id of the call this result answers. */
+  tool_call_id?: string;
+  /** Optional tool name on `tool`-role messages. */
+  name?: string;
 }
+
+/** A function tool definition supplied by the client (OpenAI function-calling). */
+export interface OpenAIFunctionDef {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+}
+
+export interface OpenAITool {
+  type: "function";
+  function: OpenAIFunctionDef;
+}
+
+/**
+ * How the client wants tool selection handled.
+ *   "auto"     — model decides (default when tools are present)
+ *   "none"     — model must not call a tool
+ *   "required" — model must call some tool
+ *   {function} — model must call this specific tool
+ */
+export type OpenAIToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { type: "function"; function: { name: string } };
 
 export interface OpenAIChatRequest {
   model: string;
@@ -23,6 +54,8 @@ export interface OpenAIChatRequest {
   frequency_penalty?: number;
   presence_penalty?: number;
   user?: string; // Used for session mapping
+  tools?: OpenAITool[];
+  tool_choice?: OpenAIToolChoice;
 }
 
 export interface OpenAIToolCall {
@@ -51,7 +84,7 @@ export interface OpenAIChatResponseChoice {
     content: string;
     tool_calls?: OpenAIToolCall[];
   };
-  finish_reason: "stop" | "length" | "content_filter" | null;
+  finish_reason: "stop" | "length" | "content_filter" | "tool_calls" | null;
 }
 
 export interface OpenAIChatResponse {
@@ -76,7 +109,7 @@ export interface OpenAIChatChunkDelta {
 export interface OpenAIChatChunkChoice {
   index: number;
   delta: OpenAIChatChunkDelta;
-  finish_reason: "stop" | "length" | "content_filter" | null;
+  finish_reason: "stop" | "length" | "content_filter" | "tool_calls" | null;
 }
 
 export interface OpenAIChatChunk {
